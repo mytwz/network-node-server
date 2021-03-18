@@ -9,7 +9,7 @@
 
 ```javascript
 const SServer = require("network-node-server")
-const app = SServer({
+const app = new SServer({
     /**中心服务器的地址 */
     centralUrl: "http://[链接地址]/server/online",
     /**入网帐号*/

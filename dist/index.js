@@ -4,7 +4,7 @@
  * @LastEditors: Summer
  * @Description:
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-18 16:29:26 +0800
+ * @LastEditTime: 2021-03-18 16:51:44 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 var __extends = (this && this.__extends) || (function () {
@@ -603,7 +603,6 @@ var SServer = /** @class */ (function (_super) {
                     client.sendSyncjob(crontime, cmd, args);
                 }
                 _this.SNodeList.push(_this.SNodes[client.id] = client);
-                console.log("createServer", client.id, Object.keys(_this.CNodes), Object.keys(_this.SNodes));
             });
         });
         return _this;
@@ -640,7 +639,6 @@ var SServer = /** @class */ (function (_super) {
                 client_1.sendPing();
                 client_1.sendShakehands(Shakehands.start, client_1.id);
                 isNotice && client_1.sendOnline(_this.id, _this.config.ip, _this.config.port);
-                console.log("createNodeClient2", Object.keys(_this.CNodes), Object.keys(_this.SNodes));
             });
         }
         catch (error) {
@@ -746,13 +744,11 @@ var SServer = /** @class */ (function (_super) {
                                         client.sendOnline(message.id, message.ip, message.port);
                                 }
                             }
-                            console.log("S", this.id, id, Object.keys(this.CNodes), Object.keys(this.SNodes), message);
                         }
                         else if (this.CNodes[id]) {
                             if (!this.CNodes[cid]) {
                                 this.connectNode(message.ip, message.port);
                             }
-                            console.log("C", this.id, id, Object.keys(this.CNodes), Object.keys(this.SNodes), message);
                         }
                         break;
                     }
@@ -803,7 +799,6 @@ var SServer = /** @class */ (function (_super) {
                     case 2:
                         lock = _b.sent();
                         if (!lock) return [3 /*break*/, 4];
-                        console.log("夺得任务服务器执行权");
                         return [4 /*yield*/, this.redis.set(this.jobServerKey, this.jobServerId = this.id)];
                     case 3:
                         _b.sent();

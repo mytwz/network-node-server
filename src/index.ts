@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-18 16:29:26 +0800
+ * @LastEditTime: 2021-03-18 16:51:44 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -531,7 +531,6 @@ class SServer extends EventEmitter {
                 client.sendSyncjobserverid(this.jobServerId);
                 for (let { crontime, cmd, args } of <Array<{ crontime:string, cmd:string, args:any[] }>><any[]>Object.values(this.cronjobs)) client.sendSyncjob(crontime, cmd, args)
                 this.SNodeList.push(this.SNodes[client.id] = client);
-                console.log("createServer", client.id, Object.keys(this.CNodes), Object.keys(this.SNodes))
             })
         });
     }
@@ -564,7 +563,6 @@ class SServer extends EventEmitter {
                 client.sendPing()
                 client.sendShakehands(Shakehands.start, client.id)
                 isNotice && client.sendOnline(this.id, this.config.ip, this.config.port)
-                console.log("createNodeClient2", Object.keys(this.CNodes), Object.keys(this.SNodes))
             })
         } catch (error) {
             console.error("connectNode", error)
@@ -660,13 +658,11 @@ class SServer extends EventEmitter {
                             if (client.id != id) client.sendOnline(message.id, message.ip, message.port);
                         }
                     }
-                    console.log("S", this.id, id, Object.keys(this.CNodes), Object.keys(this.SNodes), message)
                 }
                 else if (this.CNodes[id]) {
                     if (!this.CNodes[cid]) {
                         this.connectNode(message.ip, message.port);
                     }
-                    console.log("C", this.id, id, Object.keys(this.CNodes), Object.keys(this.SNodes), message)
                 }
                 break;
             }
@@ -690,7 +686,6 @@ class SServer extends EventEmitter {
         if (await this.redis.exists(this.jobServerKey)) return;
         let lock = await this.redis.set(this.jobServerKey + "_lock", 1, "ex", 1, "nx");
         if (lock) {
-            console.log("夺得任务服务器执行权");
             await this.redis.set(this.jobServerKey, this.jobServerId = this.id);
             this.startJobasync();
             for (let client of this.CNodeList) {
