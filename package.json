@@ -1,0 +1,39 @@
+{
+  "name": "network-node-server",
+  "version": "1.0.0",
+  "description": "简易版的分布式消息服务器，将消息同步到所有网络节点和一个简易版的分布式任务调度",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "tsc": "rm -fr ./dist & tsc --outDir ./dist",
+    "types": "tsc -d --emitDeclarationOnly --allowJs false --declarationDir ./types"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mytwz/network-node-server.git"
+  },
+  "keywords": [],
+  "author": "Summer.li",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/mytwz/network-node-server/issues"
+  },
+  "homepage": "https://github.com/mytwz/network-node-server#readme",
+  "devDependencies": {
+    "@types/buffer-xor": "^2.0.0",
+    "@types/cron": "^1.7.2",
+    "@types/ioredis": "^4.22.0",
+    "@types/node": "^14.14.22",
+    "@types/request": "^2.48.5",
+    "@types/ws": "^7.4.0",
+    "typescript": "^4.1.3"
+  },
+  "dependencies": {
+    "buffer-xor": "^2.0.2",
+    "cron": "^1.8.2",
+    "ioredis": "^4.23.0",
+    "request": "^2.88.2",
+    "ws": "^7.4.2"
+  },
+  "types": "./types"
+}
