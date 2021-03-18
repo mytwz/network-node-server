@@ -4,7 +4,7 @@
  * @LastEditors: Summer
  * @Description:
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-18 15:27:54 +0800
+ * @LastEditTime: 2021-03-18 16:29:26 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 var __extends = (this && this.__extends) || (function () {
@@ -66,7 +66,6 @@ var __spreadArray = (this && this.__spreadArray) || function (to, from) {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-Object.defineProperty(exports, "__esModule", { value: true });
 var zlib_1 = __importDefault(require("zlib"));
 var ws_1 = __importDefault(require("ws"));
 var net_1 = __importDefault(require("net"));
@@ -845,4 +844,4 @@ var SServer = /** @class */ (function (_super) {
     };
     return SServer;
 }(events_1.EventEmitter));
-exports.default = SServer;
+module.exports = SServer;

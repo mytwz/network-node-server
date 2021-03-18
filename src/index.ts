@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-18 15:27:54 +0800
+ * @LastEditTime: 2021-03-18 16:29:26 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -713,4 +713,4 @@ class SServer extends EventEmitter {
     }
 }
 
-export default SServer;
+export = SServer;

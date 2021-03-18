@@ -1,12 +1,12 @@
 {
   "name": "network-node-server",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "简易版的分布式消息服务器，将消息同步到所有网络节点和一个简易版的分布式任务调度",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "tsc": "rm -fr ./dist & tsc --outDir ./dist",
-    "types": "tsc -d --emitDeclarationOnly --allowJs false --declarationDir ./types"
+    "types": "rm -fr ./types & tsc -d --emitDeclarationOnly --allowJs false --declarationDir ./types"
   },
   "repository": {
     "type": "git",
@@ -35,5 +35,5 @@
     "request": "^2.88.2",
     "ws": "^7.4.2"
   },
-  "types": "./types"
+  "types": "./types/index.d.ts"
 }

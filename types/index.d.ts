@@ -37,4 +37,4 @@ declare class SServer extends EventEmitter {
     private vieJobServer;
     start(cb: Function): Promise<void>;
 }
-export default SServer;
+export = SServer;
