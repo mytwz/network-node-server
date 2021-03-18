@@ -4,7 +4,7 @@
  * @LastEditors: Summer
  * @Description:
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-18 16:51:44 +0800
+ * @LastEditTime: 2021-03-18 17:38:58 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 var __extends = (this && this.__extends) || (function () {
@@ -529,6 +529,11 @@ var ClientConn = /** @class */ (function (_super) {
         });
         return _this;
     }
+    Object.defineProperty(ClientConn.prototype, "addr", {
+        get: function () { return this.ip + "-" + this.port; },
+        enumerable: false,
+        configurable: true
+    });
     ClientConn.prototype.reconnection = function () {
         if (this.status === Shakehands.notstart && --this.reconnectionCount) {
             this.connect();
@@ -572,7 +577,7 @@ var ServerConn = /** @class */ (function (_super) {
 function requestNetworkAccess(url, username, password, id, ip, port, key) {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
-            return [2 /*return*/, Utils.HTTPPost(url, { username: username, password: password, id: id, ip: ip, port: port }, {}, key)];
+            return [2 /*return*/, Utils.HTTPPost(url + "/server/online", { username: username, password: password, id: id, ip: ip, port: port }, {}, key)];
         });
     });
 }
@@ -591,13 +596,15 @@ var SServer = /** @class */ (function (_super) {
         _this.jobServerId = "";
         _this.cmdjobs = {};
         _this.cronjobs = {};
+        _this.keepKey = "sserver-keepKey:";
         _this.server = net_1.default.createServer(function (socket) {
             var client = new ServerConn(socket);
             client.on("close", function (_) { _this.closeNode(client.id); });
             client.on("data", _this.onmessage.bind(_this));
             client.on("open", function () {
                 client.sendSyncevents(_this.eventNames());
-                client.sendSyncjobserverid(_this.jobServerId);
+                if (_this.jobServerId === _this.id)
+                    client.sendSyncjobserverid(_this.jobServerId);
                 for (var _i = 0, _a = Object.values(_this.cronjobs); _i < _a.length; _i++) {
                     var _b = _a[_i], crontime = _b.crontime, cmd = _b.cmd, args = _b.args;
                     client.sendSyncjob(crontime, cmd, args);
@@ -627,11 +634,14 @@ var SServer = /** @class */ (function (_super) {
         return _super.prototype.emit.apply(this, __spreadArray([event], args));
         ;
     };
+    SServer.prototype.SID = function (ip, port) {
+        return Utils.MD5(this.id + "-" + ip + "-" + port, this.config.signKey);
+    };
     SServer.prototype.connectNode = function (ip, port, isNotice) {
         var _this = this;
         if (isNotice === void 0) { isNotice = true; }
         try {
-            var client_1 = new ClientConn(Utils.MD5(this.id + "-" + ip + "-" + port, this.config.signKey), ip, port);
+            var client_1 = new ClientConn(this.SID(ip, port), ip, port);
             client_1.on("close", function (_) { _this.closeNode(client_1.id); });
             client_1.on("data", this.onmessage.bind(this));
             client_1.on("open", function () {
@@ -701,7 +711,7 @@ var SServer = /** @class */ (function (_super) {
             return __generator(this, function (_d) {
                 switch (message.type) {
                     case PackeType.asyncjobserverid: {
-                        this.jobServerId = message.id;
+                        this.jobServerId = id;
                         break;
                     }
                     case PackeType.asyncjob: {
@@ -734,7 +744,7 @@ var SServer = /** @class */ (function (_super) {
                         break;
                     }
                     case PackeType.online: {
-                        cid = this.id + "-" + message.port;
+                        cid = this.SID(message.ip, message.port);
                         if (this.SNodes[id]) {
                             if (!this.CNodes[cid]) {
                                 this.connectNode(message.ip, message.port, false);
@@ -759,29 +769,39 @@ var SServer = /** @class */ (function (_super) {
     };
     SServer.prototype.closeNode = function (id) {
         return __awaiter(this, void 0, void 0, function () {
-            var i, i;
+            var exts, i, i;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        if (this.CNodes[id]) {
-                            delete this.CNodes[id];
-                            i = this.CNodeList.findIndex(function (c) { return c.id === id; });
-                            if (this.CNodeList[i])
-                                this.CNodeList.splice(i, 1);
-                        }
+                        if (!this.CNodes[id]) return [3 /*break*/, 4];
+                        return [4 /*yield*/, this.redis.hget(this.keepKey, this.CNodes[id].addr)];
+                    case 1:
+                        exts = _a.sent();
+                        if (!Number(exts)) return [3 /*break*/, 3];
+                        return [4 /*yield*/, this.redis.hset(this.keepKey, this.CNodes[id].addr, 0)];
+                    case 2:
+                        _a.sent();
+                        _a.label = 3;
+                    case 3:
+                        delete this.CNodes[id];
+                        i = this.CNodeList.findIndex(function (c) { return c.id === id; });
+                        if (this.CNodeList[i])
+                            this.CNodeList.splice(i, 1);
+                        _a.label = 4;
+                    case 4:
                         if (this.SNodes[id]) {
                             delete this.SNodes[id];
                             i = this.SNodeList.findIndex(function (c) { return c.id === id; });
                             if (this.SNodeList[i])
                                 this.SNodeList.splice(i, 1);
                         }
-                        if (!(this.jobServerId === id)) return [3 /*break*/, 2];
+                        if (!(this.jobServerId === id)) return [3 /*break*/, 6];
                         return [4 /*yield*/, this.redis.del(this.jobServerKey)];
-                    case 1:
+                    case 5:
                         _a.sent();
                         this.vieJobServer();
-                        _a.label = 2;
-                    case 2: return [2 /*return*/];
+                        _a.label = 6;
+                    case 6: return [2 /*return*/];
                 }
             });
         });
@@ -815,23 +835,32 @@ var SServer = /** @class */ (function (_super) {
     };
     SServer.prototype.start = function (cb) {
         return __awaiter(this, void 0, void 0, function () {
-            var _a, ip, port, id, jobServerKey, redis;
+            var _a, keepKey, ip, port, id, jobServerKey, redis;
             var _this = this;
             return __generator(this, function (_b) {
                 switch (_b.label) {
                     case 0: return [4 /*yield*/, requestNetworkAccess(this.config.centralUrl, this.config.username, this.config.password, this.id, this.config.ip, this.config.port, this.config.signKey)];
                     case 1:
-                        _a = _b.sent(), ip = _a.ip, port = _a.port, id = _a.id, jobServerKey = _a.jobServerKey, redis = _a.redis;
+                        _a = _b.sent(), keepKey = _a.keepKey, ip = _a.ip, port = _a.port, id = _a.id, jobServerKey = _a.jobServerKey, redis = _a.redis;
+                        this.keepKey = keepKey;
                         this.jobServerKey = jobServerKey;
                         this.redis = new ioredis_1.default(redis);
                         if (redis.password)
                             this.redis.auth(redis.password).then(function (_) { return console.log("redis", "auth successfully"); });
-                        this.server.listen(this.config.port, function () {
-                            if (ip && id !== _this.id)
-                                _this.connectNode(ip, port);
-                            _this.vieJobServer();
-                            cb && cb();
-                        });
+                        this.server.listen(this.config.port, function () { return __awaiter(_this, void 0, void 0, function () {
+                            return __generator(this, function (_a) {
+                                switch (_a.label) {
+                                    case 0: return [4 /*yield*/, this.redis.hset(this.keepKey, this.config.ip + "-" + this.config.port, 1)];
+                                    case 1:
+                                        _a.sent();
+                                        if (ip && id !== this.id)
+                                            this.connectNode(ip, port);
+                                        this.vieJobServer();
+                                        cb && cb();
+                                        return [2 /*return*/];
+                                }
+                            });
+                        }); });
                         return [2 /*return*/];
                 }
             });

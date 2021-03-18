@@ -11,7 +11,7 @@
 const SServer = require("network-node-server")
 const app = new SServer({
     /**中心服务器的地址 */
-    centralUrl: "http://[链接地址]/server/online",
+    centralUrl: "http[s]://[链接地址]",
     /**入网帐号*/
     username: "summer",
     /**密码*/

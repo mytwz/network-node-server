@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-18 16:51:44 +0800
+ * @LastEditTime: 2021-03-18 17:38:58 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -447,6 +447,8 @@ class ClientConn extends Connection {
         });
     }
 
+    public get addr():string { return `${this.ip}-${this.port}` }
+
     reconnection() {
         if (this.status === Shakehands.notstart && --this.reconnectionCount) {
             this.connect();
@@ -480,7 +482,8 @@ type NetworkAccess = {
     port: number,
     id: string,
     redis: RedisOptions,
-    jobServerKey: string
+    jobServerKey: string,
+    keepKey: string
 }
 
 /**
@@ -494,7 +497,7 @@ type NetworkAccess = {
  * @param key 
  */
 async function requestNetworkAccess(url: string, username: string, password: string, id: string, ip: string, port: number, key: string): Promise<NetworkAccess> {
-    return <NetworkAccess><any>Utils.HTTPPost(url, { username, password, id, ip, port }, {}, key);
+    return <NetworkAccess><any>Utils.HTTPPost(url + "/server/online", { username, password, id, ip, port }, {}, key);
 }
 
 type SConfig = {
@@ -518,6 +521,7 @@ class SServer extends EventEmitter {
     private cmdjobs: { [cmd: string]: Function } = {};
     private cronjobs: { [cmd: string]: CRON.CronJob } = {};
     private server: net.Server;
+    private keepKey:string = "sserver-keepKey:";
 
     constructor(private config: SConfig) {
         super();
@@ -528,7 +532,7 @@ class SServer extends EventEmitter {
             client.on("data", this.onmessage.bind(this));
             client.on("open", () => {
                 client.sendSyncevents(this.eventNames());
-                client.sendSyncjobserverid(this.jobServerId);
+                if(this.jobServerId === this.id) client.sendSyncjobserverid(this.jobServerId);
                 for (let { crontime, cmd, args } of <Array<{ crontime:string, cmd:string, args:any[] }>><any[]>Object.values(this.cronjobs)) client.sendSyncjob(crontime, cmd, args)
                 this.SNodeList.push(this.SNodes[client.id] = client);
             })
@@ -552,10 +556,13 @@ class SServer extends EventEmitter {
         return super.emit(event, ...args);;
     }
 
+    private SID(ip: string, port: number): string {
+        return Utils.MD5(`${this.id}-${ip}-${port}`, this.config.signKey);
+    }
 
     private connectNode(ip: string, port: number, isNotice: boolean = true) {
         try {
-            let client = new ClientConn(Utils.MD5(`${this.id}-${ip}-${port}`, this.config.signKey), ip, port);
+            let client = new ClientConn(this.SID(ip, port), ip, port);
             client.on("close", _ => { this.closeNode(client.id) })
             client.on("data", this.onmessage.bind(this));
             client.on("open", () => {
@@ -619,7 +626,7 @@ class SServer extends EventEmitter {
 
         switch (message.type) {
             case PackeType.asyncjobserverid: {
-                this.jobServerId = message.id;
+                this.jobServerId = id;
                 break;
             }
             case PackeType.asyncjob: {
@@ -650,7 +657,8 @@ class SServer extends EventEmitter {
             }
             case PackeType.online: {
                 // 有服务器上线
-                let cid = this.id + "-" + message.port;
+                let cid = this.SID(message.ip, message.port);
+
                 if (this.SNodes[id]) {
                     if (!this.CNodes[cid]) {
                         this.connectNode(message.ip, message.port, false);
@@ -671,7 +679,12 @@ class SServer extends EventEmitter {
 
     private async closeNode(id: string) {
         if (this.CNodes[id]) {
+
+            let exts = await this.redis.hget(this.keepKey, this.CNodes[id].addr);
+            if(Number(exts)){ await this.redis.hset(this.keepKey, this.CNodes[id].addr, 0); }
+            
             delete this.CNodes[id]; let i = this.CNodeList.findIndex(c => c.id === id); if (this.CNodeList[i]) this.CNodeList.splice(i, 1);
+
         }
         if (this.SNodes[id]) {
             delete this.SNodes[id]; let i = this.SNodeList.findIndex(c => c.id === id); if (this.SNodeList[i]) this.SNodeList.splice(i, 1);
@@ -695,12 +708,14 @@ class SServer extends EventEmitter {
     }
 
     async start(cb: Function) {
-        let { ip, port, id, jobServerKey, redis } = await requestNetworkAccess(this.config.centralUrl, this.config.username, this.config.password, this.id, this.config.ip, this.config.port, this.config.signKey);
+        let { keepKey, ip, port, id, jobServerKey, redis } = await requestNetworkAccess(this.config.centralUrl, this.config.username, this.config.password, this.id, this.config.ip, this.config.port, this.config.signKey);
+        this.keepKey = keepKey;
         this.jobServerKey = jobServerKey;
         this.redis = new Redis(redis);
         if (redis.password) this.redis.auth(redis.password).then(_ => console.log("redis", "auth successfully"));
 
-        this.server.listen(this.config.port, () => {
+        this.server.listen(this.config.port, async () => {
+            await this.redis.hset(this.keepKey, `${this.config.ip}-${this.config.port}`, 1);
             if (ip && id !== this.id) this.connectNode(ip, port);
             this.vieJobServer();
             cb && cb();

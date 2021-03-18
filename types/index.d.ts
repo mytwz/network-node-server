@@ -21,9 +21,11 @@ declare class SServer extends EventEmitter {
     private cmdjobs;
     private cronjobs;
     private server;
+    private keepKey;
     constructor(config: SConfig);
     on(event: string, fn: (...args: any[]) => void): this;
     emit(event: string, ...args: any[]): boolean;
+    private SID;
     private connectNode;
     private startJobasync;
     job(crontime: string, cmd: string, ...args: any[]): void;
