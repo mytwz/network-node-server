@@ -2,7 +2,7 @@
   "name": "network-node-server",
   "version": "1.0.4",
   "description": "简易版的分布式消息服务器，将消息同步到所有网络节点和一个简易版的分布式任务调度",
-  "main": "index.js",
+  "main": "./dist/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "tsc": "rm -fr ./dist & tsc --outDir ./dist",
