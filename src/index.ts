@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-19 10:42:43 +0800
+ * @LastEditTime: 2021-03-19 16:56:27 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -32,6 +32,8 @@ enum PackeType {
     emitevent,
     /**同步任务 */
     asyncjob,
+    /**删除任务 */
+    deljob,
     /**触发任务 */
     emitjob,
     /**同步事件主机ID */
@@ -108,7 +110,7 @@ const Utils = {
     MD5(str: string, key: string): string {
         return crypto.createHash('md5').update(str + key).digest('hex');
     },
-
+    
     XOREncoder(a: string | Object, key: string): string | Object {
         try {
             return xor(typeof (a) === "string" ? Buffer.from(a) : Buffer.from(JSON.stringify(a)), Buffer.from(key)).toString("base64");
@@ -178,18 +180,25 @@ const Utils = {
                 return Buffer.concat([type, length].concat(buffers));
             }
             case PackeType.asyncjob: {
+                let id = Buffer.from(_data.id);
+                let idlength = Buffer.alloc(4); idlength.writeUInt32BE(id.length);
                 let crontime = Buffer.from(_data.crontime);
                 let cmd = Buffer.from(_data.cmd);
                 let content = Buffer.from(JSON.stringify(_data.content));
                 let cronlength = Buffer.alloc(4); cronlength.writeUInt32BE(crontime.length);
                 let cmdlength = Buffer.alloc(4); cmdlength.writeUInt32BE(cmd.length);
                 let contentlength = Buffer.alloc(4); contentlength.writeUInt32BE(content.length);
-                return Buffer.concat([type, cronlength, crontime, cmdlength, cmd, contentlength, content]);
+                return Buffer.concat([type, idlength, id, cronlength, crontime, cmdlength, cmd, contentlength, content]);
             }
             case PackeType.emitjob: {
-                let cmd = Buffer.from(_data.cmd);
-                let cmdlength = Buffer.alloc(4); cmdlength.writeUInt32BE(cmd.length);
-                return Buffer.concat([type, cmdlength, cmd]);
+                let id = Buffer.from(_data.id);
+                let idlength = Buffer.alloc(4); idlength.writeUInt32BE(id.length);
+                return Buffer.concat([type, idlength, id]);
+            }
+            case PackeType.deljob: {
+                let id = Buffer.from(_data.id);
+                let idlength = Buffer.alloc(4); idlength.writeUInt32BE(id.length);
+                return Buffer.concat([type, idlength, id]);
             }
             case PackeType.emitevent: {
                 let event = Buffer.from(_data.event);
@@ -270,6 +279,8 @@ const Utils = {
                 return { type, eventname, args };
             }
             case PackeType.asyncjob: {
+                let idlength = buffer.readUInt32BE(offset); offset += 4;
+                let id = buffer.slice(offset, offset += idlength);
                 let cronlength = buffer.readUInt32BE(offset); offset += 4;
                 let crontime = buffer.slice(offset, offset += cronlength).toString();
                 let cmdlength = buffer.readUInt32BE(offset); offset += 4;
@@ -278,12 +289,17 @@ const Utils = {
                 let contentStr = buffer.slice(offset, offset += contentlength).toString();
                 let content = JSON.parse(contentStr);
 
-                return { type, crontime, cmd, content };
+                return { type, id, crontime, cmd, content };
             }
             case PackeType.emitjob: {
-                let cmdlength = buffer.readUInt32BE(offset); offset += 4;
-                let cmd = buffer.slice(offset, offset += cmdlength).toString();
-                return { type, cmd };
+                let idlength = buffer.readUInt32BE(offset); offset += 4;
+                let id = buffer.slice(offset, offset += idlength).toString();
+                return { type, id };
+            }
+            case PackeType.deljob: {
+                let idlength = buffer.readUInt32BE(offset); offset += 4;
+                let id = buffer.slice(offset, offset += idlength).toString();
+                return { type, id };
             }
             case PackeType.asyncjobserverid: {
                 let idlength = buffer.readUInt32BE(offset); offset += 4;
@@ -395,12 +411,13 @@ class Connection extends WebSocket {
 
     /**
      * 同步指令任务
+     * @param {*} id 
      * @param {*} crontime 
      * @param {*} cmd 
      * @param {*} args 
      */
-    sendSyncjob(crontime: string, cmd: string, args: any[]) {
-        this.sendPacket(PackeType.asyncjob, { crontime, cmd, content: args });
+    sendSyncjob(id: string, crontime: string, cmd: string, args: any[]) {
+        this.sendPacket(PackeType.asyncjob, { id, crontime, cmd, content: args });
     }
 
     /**
@@ -414,10 +431,18 @@ class Connection extends WebSocket {
 
     /**
      * 执行指令任务
-     * @param {*} cmd 
+     * @param {*} id 
      */
-    sendEmitjob(cmd: string) {
-        this.sendPacket(PackeType.emitjob, { cmd });
+    sendEmitjob(id: string) {
+        this.sendPacket(PackeType.emitjob, { id });
+    }
+
+    /**
+     * 删除指令任务
+     * @param {*} id 
+     */
+    sendDeljob(id: string) {
+        this.sendPacket(PackeType.deljob, { id });
     }
 
     /**
@@ -500,27 +525,48 @@ async function requestNetworkAccess(url: string, username: string, password: str
     return <NetworkAccess><any>Utils.HTTPPost(url + "/server/online", { username, password, id, ip, port }, {}, key);
 }
 
+/**服务配置 */
 type SConfig = {
+    /**入网用户名 */
     username: string,
+    /**入网帐号密码 */
     password: string,
+    /**中心服务地址 */
     centralUrl: string,
+    /**本地网络Ip */
     ip: string,
+    /**本地网络端口号 */
     port: number,
+    /**与中心服务器通信的签名Key */
     signKey: string,
 }
 
+type CmdJobs = { [cmd: string]: Function }
+
 class SServer extends EventEmitter {
+    /**主机ID  */
     private id: string = Utils.ID24;
+    /**服务端连接列表 */
     private SNodes: { [id: string]: ServerConn } = {};
+    /**服务端连接列表 */
     private SNodeList: ServerConn[] = [];
+    /**客户端连接列表 */
     private CNodes: { [id: string]: ClientConn } = {};
+    /**客户端连接列表 */
     private CNodeList: ClientConn[] = [];
+    /**Redis 客户端连接 */
     private redis: Redis.Redis = <any>null;
+    /**定时任务服务器的标识 Key */
     private jobServerKey: string = "";
+    /**定时任务服务器的ID  */
     private jobServerId: string = "";
+    /**指令任务对象 */
     private cmdjobs: { [cmd: string]: Function } = {};
+    /**定时任务对象 */
     private cronjobs: { [cmd: string]: CRON.CronJob } = {};
+    /**本地 Socket 服务 */
     private server: net.Server;
+    /**服务缓存 Key */
     private keepKey:string = "sserver-keepKey:";
 
     constructor(private config: SConfig) {
@@ -533,12 +579,17 @@ class SServer extends EventEmitter {
             client.on("open", () => {
                 client.sendSyncevents(this.eventNames());
                 if(this.jobServerId === this.id) client.sendSyncjobserverid(this.jobServerId);
-                for (let { crontime, cmd, args } of <Array<{ crontime:string, cmd:string, args:any[] }>><any[]>Object.values(this.cronjobs)) client.sendSyncjob(crontime, cmd, args)
+                for (let { id, crontime, cmd, args } of <Array<{ id: string, crontime:string, cmd:string, args:any[] }>><any[]>Object.values(this.cronjobs)) client.sendSyncjob(id, crontime, cmd, args)
                 this.SNodeList.push(this.SNodes[client.id] = client);
             })
         });
     }
 
+    /**
+     * 绑定或者订阅事件
+     * @param event 事件名称
+     * @param fn 回调函数
+     */
     public on(event: string, fn: (...args: any[]) => void) {
         super.on(event, fn);
         for (let client of this.CNodeList) {
@@ -548,6 +599,11 @@ class SServer extends EventEmitter {
         return this;
     }
 
+    /**
+     * 执行绑定的网络事件
+     * @param event 事件名称
+     * @param args 携带参数
+     */
     public emit(event: string, ...args: any[]) {
         for (let client of this.CNodeList.filter(c => c.events.has(event))) {
             client.sendEmitevent(event, args);
@@ -556,10 +612,22 @@ class SServer extends EventEmitter {
         return super.emit(event, ...args);;
     }
 
+    /**
+     * 生成客户端链接ID 
+     * @param ip 
+     * @param port 
+     * @requires MD5ID
+     */
     private SID(ip: string, port: number): string {
         return Utils.MD5(`${this.id}-${ip}-${port}`, this.config.signKey);
     }
 
+    /**
+     * 连接网络节点
+     * @param ip 远端主机IP
+     * @param port 远端主机端口号
+     * @param isNotice 是否广播其他主机连接此地址
+     */
     private connectNode(ip: string, port: number, isNotice: boolean = true) {
         try {
             let client = new ClientConn(this.SID(ip, port), ip, port);
@@ -576,6 +644,9 @@ class SServer extends EventEmitter {
         }
     }
 
+    /**
+     *开始执行定时任务
+     */
     private startJobasync() {
         if (this.jobServerId === this.id) {
             for (let cmd in this.cronjobs) {
@@ -585,29 +656,63 @@ class SServer extends EventEmitter {
         }
     }
 
-
-    public job(crontime: string, cmd: string, ...args: any[]) {
+    /**
+     * 添加定时任务
+     * @param crontime cron 时间参数
+     * @param cmd 任务指令
+     * @param args 携带参数
+     * @requires 任务ID 
+     */
+    public job(crontime: string, cmd: string, ...args: any[]): string {
+        let id = Utils.ID24;
         for (let client of this.CNodeList) {
-            client.sendSyncjob(crontime, cmd, args);
+            client.sendSyncjob(id, crontime, cmd, args);
         }
 
-        this.addCronJon(crontime, cmd, ...args)
+        return this.addCronJon(id, crontime, cmd, ...args)
     }
 
-    private execCmd(cmd: string) {
+    /**
+     * 移除定时任务
+     * @param id 
+     */
+    public removeJob(id: string){
+        let task = this.cronjobs[id];
+        if(task){
+            task.stop();
+            delete this.cronjobs[id];
+            
+            for (let client of this.CNodeList) {
+                client.sendDeljob(id);
+            }
+        }
+    }
+
+    /**
+     * 执行定时任务
+     * @param id 任务ID
+     */
+    public execCmd(id: string) {
         try {
             let client = [0, ...this.CNodeList].sort(_ => Math.random() - .5).pop()
-            if (client instanceof ClientConn) client.sendEmitjob(cmd);
-            else this.onmessage(this.id, { type: PackeType.emitjob, cmd });
+            if (client instanceof ClientConn) client.sendEmitjob(id);
+            else this.onmessage(this.id, { type: PackeType.emitjob, id });
         } catch (error) {
             console.error("addCronJon-执行报错", error)
         }
     }
 
-    private addCronJon(crontime: string, cmd: string, ...args: any[]) {
-        if (this.cronjobs[cmd]) return;
+    /**
+     * 添加定时任务
+     * @param id 任务ID 
+     * @param crontime cron 格式的时间参数
+     * @param cmd 指令名称
+     * @param args 携带参数
+     */
+    private addCronJon(id: string, crontime: string, cmd: string, ...args: any[]): string {
+        if (this.cronjobs[id]) return "";
 
-        let task = CRON.job(crontime, () => { this.execCmd(cmd); });
+        let task = CRON.job(crontime, () => { this.execCmd(id); });
 
         if (this.jobServerId === this.id) task.start();
 
@@ -615,13 +720,25 @@ class SServer extends EventEmitter {
         (<any>task).cmd = cmd;
         (<any>task).args = args;
 
-        this.cronjobs[cmd] = task;
+        this.cronjobs[id] = task;
+
+        return id;
     }
 
-    public setCmdJobs(cmds: { [cmd: string]: Function }) {
+    /**
+     * 设置任务指令
+     * @param cmds 指令对象
+     */
+    public setCmdJobs(cmds: CmdJobs) {
         this.cmdjobs = cmds;
     }
 
+
+    /**
+     * 处理消息
+     * @param id 链接ID  
+     * @param message 消息
+     */
     private async onmessage(id: string, message: any) {
 
         switch (message.type) {
@@ -630,17 +747,25 @@ class SServer extends EventEmitter {
                 break;
             }
             case PackeType.asyncjob: {
-                let { crontime, cmd, content: args } = message;
-                this.addCronJon(crontime, cmd, ...args)
+                let { id, crontime, cmd, content: args } = message;
+                this.addCronJon(id, crontime, cmd, ...args)
                 break;
             }
             case PackeType.emitjob: {
                 try {
-                    let task = this.cronjobs[message.cmd];
-                    let job = this.cmdjobs[message.cmd];
+                    let task = <any>this.cronjobs[message.id];
+                    let job = this.cmdjobs[task.cmd];
                     if (task && job instanceof Function) Promise.resolve(job.apply(this.cmdjobs, (<any>task).args))
                 } catch (error) {
                     console.error("onmessage", error)
+                }
+                break;
+            }
+            case PackeType.deljob:{
+                let task = this.cronjobs[message.id];
+                if(task){
+                    task.stop();
+                    delete this.cronjobs[message.id];
                 }
                 break;
             }
@@ -677,6 +802,10 @@ class SServer extends EventEmitter {
         }
     }
 
+    /**
+     * 主机断线
+     * @param id 主机ID 
+     */
     private async closeNode(id: string) {
         if (this.CNodes[id]) {
 
@@ -695,6 +824,9 @@ class SServer extends EventEmitter {
         }
     }
 
+    /**
+     * 争夺任务服务器的执行权限
+     */
     private async vieJobServer() {
         if (await this.redis.exists(this.jobServerKey)) return;
         let lock = await this.redis.set(this.jobServerKey + "_lock", 1, "ex", 1, "nx");
@@ -707,19 +839,25 @@ class SServer extends EventEmitter {
         }
     }
 
+    /**
+     * 启动服务
+     * @param cb  启动回调
+     */
     async start(cb: Function) {
         let { keepKey, ip, port, id, jobServerKey, redis } = await requestNetworkAccess(this.config.centralUrl, this.config.username, this.config.password, this.id, this.config.ip, this.config.port, this.config.signKey);
-        this.keepKey = keepKey;
-        this.jobServerKey = jobServerKey;
-        this.redis = new Redis(redis);
-        if (redis.password) this.redis.auth(redis.password).then(_ => console.log("redis", "auth successfully"));
-
-        this.server.listen(this.config.port, async () => {
-            await this.redis.hset(this.keepKey, `${this.config.ip}-${this.config.port}`, 1);
-            if (ip && id !== this.id) this.connectNode(ip, port);
-            this.vieJobServer();
-            cb && cb();
-        })
+        if(redis){
+            this.keepKey = keepKey;
+            this.jobServerKey = jobServerKey;
+            this.redis = new Redis(redis);
+            if (redis.password) this.redis.auth(redis.password).then(_ => console.log("redis", "auth successfully"));
+    
+            this.server.listen(this.config.port, async () => {
+                await this.redis.hset(this.keepKey, `${this.config.ip}-${this.config.port}`, 1);
+                if (ip && ip !== this.config.ip && port !== this.config.port) this.connectNode(ip, port);
+                this.vieJobServer();
+                cb && cb();
+            })
+        }
     }
 }
 
