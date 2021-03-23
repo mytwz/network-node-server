@@ -1,6 +1,6 @@
 {
   "name": "network-node-server",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "简易版的分布式消息服务器，将消息同步到所有网络节点和一个简易版的分布式任务调度",
   "main": "./dist/index.js",
   "scripts": {
@@ -12,7 +12,21 @@
     "type": "git",
     "url": "git+https://github.com/mytwz/network-node-server.git"
   },
-  "keywords": [],
+  "keywords": [
+    "websocket",
+    "ssocket",
+    "socket",
+    "分布式",
+    "时间调度器",
+    "分布式任务",
+    "分布式调度",
+    "分布式集群",
+    "任务",
+    "调度器",
+    "集群",
+    "distributed",
+    "scheduler"
+  ],
   "author": "Summer.li",
   "license": "ISC",
   "bugs": {
