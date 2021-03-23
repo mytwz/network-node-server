@@ -1,9 +1,9 @@
 ![npm version](https://img.shields.io/badge/npm-1.0.0-brightgreen)
  > 简易版的分布式消息服务器，将消息同步到所有网络节点和一个简易版的分布式任务调度，觉得小弟写的还行的话，就给个[Star](https://github.com/mytwz/network-node-server)⭐️吧~
 
- ## 食用说明
+## 食用说明
 
- ### [安装启动中心服务器](https://github.com/mytwz/network-node-szook)
+### [安装启动中心服务器](https://github.com/mytwz/network-node-szook)
 
 ```javascript
 const SServer = require("network-node-server")

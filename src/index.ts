@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-19 16:56:27 +0800
+ * @LastEditTime: 2021-03-23 11:54:07 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -350,6 +350,7 @@ class Connection extends WebSocket {
             }
             else this.emit("data", this.id, buffer);
         });
+
     }
 
 
@@ -472,7 +473,7 @@ class ClientConn extends Connection {
         });
     }
 
-    public get addr():string { return `${this.ip}-${this.port}` }
+    public get addr():string { return `${this.ip}:${this.port}` }
 
     reconnection() {
         if (this.status === Shakehands.notstart && --this.reconnectionCount) {
@@ -714,13 +715,14 @@ class SServer extends EventEmitter {
 
         let task = CRON.job(crontime, () => { this.execCmd(id); });
 
-        if (this.jobServerId === this.id) task.start();
-
         (<any>task).crontime = crontime;
         (<any>task).cmd = cmd;
         (<any>task).args = args;
+        (<any>task).id = id;
 
         this.cronjobs[id] = task;
+        
+        if (this.jobServerId === this.id) task.start();
 
         return id;
     }
@@ -809,8 +811,7 @@ class SServer extends EventEmitter {
     private async closeNode(id: string) {
         if (this.CNodes[id]) {
 
-            let exts = await this.redis.hget(this.keepKey, this.CNodes[id].addr);
-            if(Number(exts)){ await this.redis.hset(this.keepKey, this.CNodes[id].addr, 0); }
+            await this.redis.setnx(`${this.keepKey}:${this.CNodes[id].addr}`, 0);
             
             delete this.CNodes[id]; let i = this.CNodeList.findIndex(c => c.id === id); if (this.CNodeList[i]) this.CNodeList.splice(i, 1);
 
@@ -822,6 +823,7 @@ class SServer extends EventEmitter {
             await this.redis.del(this.jobServerKey);
             this.vieJobServer();
         }
+        console.log("断线", id)
     }
 
     /**
@@ -852,9 +854,9 @@ class SServer extends EventEmitter {
             if (redis.password) this.redis.auth(redis.password).then(_ => console.log("redis", "auth successfully"));
     
             this.server.listen(this.config.port, async () => {
-                await this.redis.hset(this.keepKey, `${this.config.ip}-${this.config.port}`, 1);
-                if (ip && ip !== this.config.ip && port !== this.config.port) this.connectNode(ip, port);
-                this.vieJobServer();
+                await this.redis.set(`${this.keepKey}:${this.config.ip}:${this.config.port}`, 1);
+                if (ip && ip + port !== this.config.ip + this.config.port) this.connectNode(ip, port);
+                await this.vieJobServer();
                 cb && cb();
             })
         }

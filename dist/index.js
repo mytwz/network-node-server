@@ -4,7 +4,7 @@
  * @LastEditors: Summer
  * @Description:
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-19 16:56:27 +0800
+ * @LastEditTime: 2021-03-23 11:54:07 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
@@ -499,7 +499,7 @@ class ClientConn extends Connection {
             setTimeout(this.reconnection.bind(this), 1000);
         });
     }
-    get addr() { return `${this.ip}-${this.port}`; }
+    get addr() { return `${this.ip}:${this.port}`; }
     reconnection() {
         if (this.status === Shakehands.notstart && --this.reconnectionCount) {
             this.connect();
@@ -701,12 +701,13 @@ class SServer extends events_1.EventEmitter {
         if (this.cronjobs[id])
             return "";
         let task = cron_1.default.job(crontime, () => { this.execCmd(id); });
-        if (this.jobServerId === this.id)
-            task.start();
         task.crontime = crontime;
         task.cmd = cmd;
         task.args = args;
+        task.id = id;
         this.cronjobs[id] = task;
+        if (this.jobServerId === this.id)
+            task.start();
         return id;
     }
     /**
@@ -796,10 +797,7 @@ class SServer extends events_1.EventEmitter {
     closeNode(id) {
         return __awaiter(this, void 0, void 0, function* () {
             if (this.CNodes[id]) {
-                let exts = yield this.redis.hget(this.keepKey, this.CNodes[id].addr);
-                if (Number(exts)) {
-                    yield this.redis.hset(this.keepKey, this.CNodes[id].addr, 0);
-                }
+                yield this.redis.setnx(`${this.keepKey}:${this.CNodes[id].addr}`, 0);
                 delete this.CNodes[id];
                 let i = this.CNodeList.findIndex(c => c.id === id);
                 if (this.CNodeList[i])
@@ -815,6 +813,7 @@ class SServer extends events_1.EventEmitter {
                 yield this.redis.del(this.jobServerKey);
                 this.vieJobServer();
             }
+            console.log("断线", id);
         });
     }
     /**
@@ -848,10 +847,10 @@ class SServer extends events_1.EventEmitter {
                 if (redis.password)
                     this.redis.auth(redis.password).then(_ => console.log("redis", "auth successfully"));
                 this.server.listen(this.config.port, () => __awaiter(this, void 0, void 0, function* () {
-                    yield this.redis.hset(this.keepKey, `${this.config.ip}-${this.config.port}`, 1);
-                    if (ip && ip !== this.config.ip && port !== this.config.port)
+                    yield this.redis.set(`${this.keepKey}:${this.config.ip}:${this.config.port}`, 1);
+                    if (ip && ip + port !== this.config.ip + this.config.port)
                         this.connectNode(ip, port);
-                    this.vieJobServer();
+                    yield this.vieJobServer();
                     cb && cb();
                 }));
             }
