@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-23 11:54:07 +0800
+ * @LastEditTime: 2021-03-23 16:09:36 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -509,7 +509,9 @@ type NetworkAccess = {
     id: string,
     redis: RedisOptions,
     jobServerKey: string,
-    keepKey: string
+    keepKey: string,
+    code:number,
+    msg:string,
 }
 
 /**
@@ -846,8 +848,9 @@ class SServer extends EventEmitter {
      * @param cb  启动回调
      */
     async start(cb: Function) {
-        let { keepKey, ip, port, id, jobServerKey, redis } = await requestNetworkAccess(this.config.centralUrl, this.config.username, this.config.password, this.id, this.config.ip, this.config.port, this.config.signKey);
-        if(redis){
+        let { code, msg, keepKey, ip, port, id, jobServerKey, redis } = await requestNetworkAccess(this.config.centralUrl, this.config.username, this.config.password, this.id, this.config.ip, this.config.port, this.config.signKey);
+        
+        if(code == 100 && redis){
             this.keepKey = keepKey;
             this.jobServerKey = jobServerKey;
             this.redis = new Redis(redis);
@@ -860,6 +863,7 @@ class SServer extends EventEmitter {
                 cb && cb();
             })
         }
+        console.log({ code, msg })
     }
 }
 
