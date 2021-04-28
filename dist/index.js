@@ -4,8 +4,8 @@
  * @LastEditors: Summer
  * @Description:
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-23 16:09:36 +0800
- * @FilePath: /network-node-server/src/index.ts
+ * @LastEditTime: 2021-03-30 11:32:11 +0800
+ * @FilePath: /ssocket-sserver-node/root/桌面/lib-package/network-node-server/dist/index.js
  */
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
@@ -52,6 +52,8 @@ var PackeType;
     PackeType[PackeType["asyncjobserverid"] = 9] = "asyncjobserverid";
     /**上线 */
     PackeType[PackeType["online"] = 10] = "online";
+    /**手动销毁 */
+    PackeType[PackeType["userdestroy"] = 11] = "userdestroy";
 })(PackeType || (PackeType = {}));
 ;
 /**握手状态 */
@@ -246,7 +248,7 @@ const Utils = {
                 return Buffer.concat([type, idlength, id]);
             }
             default: {
-                throw new Error(`not found packet type: ${_type}`);
+                return Buffer.concat([type]);
             }
         }
     },
@@ -362,6 +364,8 @@ const Utils = {
 class Connection extends ws_1.default {
     constructor() {
         super(null);
+        this.socket = null;
+        this.userdestroy = false;
         this.status = Shakehands.start;
         this.id = "";
         this.events = new Set();
@@ -386,6 +390,13 @@ class Connection extends ws_1.default {
                     else if (Shakehands.end === ack) {
                         this.sendShakehands(Shakehands.end);
                         this.emit("open");
+                    }
+                }
+                else if (PackeType.userdestroy === packet.type) {
+                    console.log("用户销毁");
+                    this.userdestroy = true;
+                    if ("destroyed" in this.socket) {
+                        !this.socket.destroyed && this.socket.destroy();
                     }
                 }
                 this.emit("data", this.id, packet);
@@ -485,6 +496,14 @@ class Connection extends ws_1.default {
     sendSyncjobserverid(id) {
         this.sendPacket(PackeType.asyncjobserverid, id);
     }
+    destroy() {
+        this.userdestroy = true;
+        this.sendPacket(PackeType.userdestroy);
+        if ("destroyed" in this.socket) {
+            console.log("销毁")
+            setTimeout(_ => !this.socket.destroyed && this.socket.destroy(), 500);
+        }
+    }
 }
 class ClientConn extends Connection {
     constructor(id, ip, port) {
@@ -492,10 +511,12 @@ class ClientConn extends Connection {
         this.id = id;
         this.ip = ip;
         this.port = port;
-        this.reconnectionCount = 20;
+        this.reconnectionCount = 10;
         this.connect();
         this.on("close", _ => {
             this.status = Shakehands.notstart;
+            if (this.userdestroy)
+                return;
             setTimeout(this.reconnection.bind(this), 1000);
         });
     }
@@ -505,10 +526,13 @@ class ClientConn extends Connection {
             this.connect();
             console.log("发起重连", this.id);
         }
+        else {
+            this.emit("destroy");
+        }
     }
     connect() {
         this.status = Shakehands.notstart;
-        let socket = net_1.default.connect(this.port, this.ip, () => {
+        let socket = this.socket = net_1.default.connect(this.port, this.ip, () => {
             this.reconnectionCount = 20;
             this.status = Shakehands.start;
             this.setSocket(socket, [], 0);
@@ -522,7 +546,7 @@ class ClientConn extends Connection {
 class ServerConn extends Connection {
     constructor(socket) {
         super();
-        this.setSocket(socket, [], 0);
+        this.setSocket(this.socket = socket, [], 0);
     }
 }
 /**
@@ -539,6 +563,38 @@ function requestNetworkAccess(url, username, password, id, ip, port, key) {
     return __awaiter(this, void 0, void 0, function* () {
         return Utils.HTTPPost(url + "/server/online", { username, password, id, ip, port }, {}, key);
     });
+}
+class ClientConnQueue extends events_1.EventEmitter {
+    constructor(id, signKey, verification) {
+        super();
+        this.addr = [];
+        this.status = 0;
+        this.signKey = signKey;
+        this.id = id;
+        this.verification = verification;
+    }
+    create() {
+        let addr = this.addr.pop();
+        if (addr && this.verification(addr)) {
+            let { ip, port, isNotice, id } = addr;
+            let client = new ClientConn(id, ip, port);
+            client.on("open", () => {
+                this.emit("open", client, isNotice);
+                if (this.addr.length) {
+                    this.create();
+                }
+                else
+                    this.status = 0;
+            });
+        }
+    }
+    open(ip, port, isNotice) {
+        this.addr.push({ ip, port, isNotice, id: Utils.MD5(`${this.id}-${ip}-${port}`, this.signKey) });
+        if (this.status === 0) {
+            this.status = 1;
+            this.create();
+        }
+    }
 }
 class SServer extends events_1.EventEmitter {
     constructor(config) {
@@ -566,18 +622,31 @@ class SServer extends events_1.EventEmitter {
         this.cronjobs = {};
         /**服务缓存 Key */
         this.keepKey = "sserver-keepKey:";
+        this.master = true;
         this.server = net_1.default.createServer(socket => {
             let client = new ServerConn(socket);
+            if (this.master && !this.CNodeList.length)
+                return client.destroy();
             client.on("close", _ => { this.closeNode(client.id); });
             client.on("data", this.onmessage.bind(this));
             client.on("open", () => {
+                this.SNodeList.push(this.SNodes[client.id] = client);
                 client.sendSyncevents(this.eventNames());
                 if (this.jobServerId === this.id)
                     client.sendSyncjobserverid(this.jobServerId);
                 for (let { id, crontime, cmd, args } of Object.values(this.cronjobs))
                     client.sendSyncjob(id, crontime, cmd, args);
-                this.SNodeList.push(this.SNodes[client.id] = client);
             });
+        });
+        this.clientConnQueue = new ClientConnQueue(this.id, this.config.signKey, (addr) => !this.CNodes[addr.id]);
+        this.clientConnQueue.on("open", (client, isNotice) => {
+            if (this.CNodes[client.id] === client)
+                return;
+            this.CNodeList.push(this.CNodes[client.id] = client);
+            client.on("close", _ => { this.closeNode(client.id); });
+            client.on("data", this.onmessage.bind(this));
+            client.sendShakehands(Shakehands.start, client.id);
+            isNotice && setTimeout(_ => client.sendOnline(this.id, this.config.ip, this.config.port), 100);
         });
     }
     /**
@@ -602,7 +671,6 @@ class SServer extends events_1.EventEmitter {
             client.sendEmitevent(event, args);
         }
         return super.emit(event, ...args);
-        ;
     }
     /**
      * 生成客户端链接ID
@@ -621,15 +689,7 @@ class SServer extends events_1.EventEmitter {
      */
     connectNode(ip, port, isNotice = true) {
         try {
-            let client = new ClientConn(this.SID(ip, port), ip, port);
-            client.on("close", _ => { this.closeNode(client.id); });
-            client.on("data", this.onmessage.bind(this));
-            client.on("open", () => {
-                this.CNodeList.push(this.CNodes[client.id] = client);
-                client.sendPing();
-                client.sendShakehands(Shakehands.start, client.id);
-                isNotice && client.sendOnline(this.id, this.config.ip, this.config.port);
-            });
+            this.clientConnQueue.open(ip, port, isNotice);
         }
         catch (error) {
             console.error("connectNode", error);
@@ -848,8 +908,9 @@ class SServer extends events_1.EventEmitter {
                     this.redis.auth(redis.password).then(_ => console.log("redis", "auth successfully"));
                 this.server.listen(this.config.port, () => __awaiter(this, void 0, void 0, function* () {
                     yield this.redis.set(`${this.keepKey}:${this.config.ip}:${this.config.port}`, 1);
-                    if (ip && ip + port !== this.config.ip + this.config.port)
+                    if (this.master = (ip && ip + port) !== (this.config.ip + this.config.port)) {
                         this.connectNode(ip, port);
+                    }
                     yield this.vieJobServer();
                     cb && cb();
                 }));

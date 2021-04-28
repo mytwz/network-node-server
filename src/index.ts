@@ -3,7 +3,7 @@
  * @LastEditors: Summer
  * @Description: 
  * @Date: 2021-03-18 11:16:46 +0800
- * @LastEditTime: 2021-03-23 16:09:36 +0800
+ * @LastEditTime: 2021-04-02 16:21:54 +0800
  * @FilePath: /network-node-server/src/index.ts
  */
 
@@ -39,7 +39,9 @@ enum PackeType {
     /**同步事件主机ID */
     asyncjobserverid,
     /**上线 */
-    online
+    online,
+    /**手动销毁 */
+    userdestroy
 };
 
 /**握手状态 */
@@ -213,7 +215,7 @@ const Utils = {
                 return Buffer.concat([type, idlength, id]);
             }
             default: {
-                throw new Error(`not found packet type: ${_type}`)
+                return Buffer.concat([type]);
             }
         }
     },
@@ -315,9 +317,11 @@ const Utils = {
 
 
 class Connection extends WebSocket {
+    public socket: net.Socket = <net.Socket><unknown>null;
     protected status: Shakehands;
     public id: string;
     public events: Set<string>;
+    protected userdestroy:boolean = false;
     constructor() {
         super(<string><unknown>null);
         this.status = Shakehands.start;
@@ -344,6 +348,12 @@ class Connection extends WebSocket {
                     else if (Shakehands.end === ack) {
                         this.sendShakehands(Shakehands.end);
                         this.emit("open");
+                    }
+                }
+                else if(PackeType.userdestroy === packet.type){
+                    this.userdestroy = true;
+                    if ("destroyed" in this.socket) {
+                        !this.socket.destroyed && this.socket.destroy()
                     }
                 }
                 this.emit("data", this.id, packet)
@@ -453,6 +463,14 @@ class Connection extends WebSocket {
     sendSyncjobserverid(id: string) {
         this.sendPacket(PackeType.asyncjobserverid, id)
     }
+
+    destroy(){
+        this.userdestroy = true;
+        this.sendPacket(PackeType.userdestroy)
+        if ("destroyed" in this.socket) {
+            setTimeout(_=> !this.socket.destroyed && this.socket.destroy(), 500);
+        }
+    }
 }
 
 
@@ -465,11 +483,12 @@ class ClientConn extends Connection {
         this.id = id;
         this.ip = ip;
         this.port = port;
-        this.reconnectionCount = 20;
+        this.reconnectionCount = 10;
         this.connect();
         this.on("close", _ => {
             this.status = Shakehands.notstart;
-            setTimeout(this.reconnection.bind(this), 1000)
+            if(this.userdestroy) return;
+            // setTimeout(this.reconnection.bind(this), 1000)
         });
     }
 
@@ -480,11 +499,14 @@ class ClientConn extends Connection {
             this.connect();
             console.log("发起重连", this.id)
         }
+        else {
+            this.emit("destroy")
+        }
     }
 
     connect() {
         this.status = Shakehands.notstart;
-        let socket = net.connect(this.port, this.ip, () => {
+        let socket = this.socket = net.connect(this.port, this.ip, () => {
             this.reconnectionCount = 20;
             this.status = Shakehands.start;
             (<any>this).setSocket(socket, [], 0);
@@ -499,7 +521,7 @@ class ClientConn extends Connection {
 class ServerConn extends Connection {
     constructor(socket: net.Socket) {
         super();
-        (<any>this).setSocket(socket, [], 0);
+        (<any>this).setSocket(this.socket = socket, [], 0);
     }
 }
 
@@ -546,6 +568,48 @@ type SConfig = {
 
 type CmdJobs = { [cmd: string]: Function }
 
+type Addr = { ip: string, port: number, isNotice:boolean, id: string}
+
+type ConnVerification = (addr: Addr) => boolean;
+
+class ClientConnQueue extends EventEmitter {
+    private addr: Addr[] = [];
+    private status: 0|1 = 0;
+    private signKey: string;
+    private id:string;
+    private verification: ConnVerification;
+    constructor(id: string, signKey: string, verification: ConnVerification){
+        super();
+        this.signKey = signKey;
+        this.id = id;
+        this.verification = verification;
+    }
+
+    private create(){
+        let addr = this.addr.pop();
+        if(addr && this.verification(addr)){
+            let { ip, port, isNotice, id } = addr;
+            let client = new ClientConn(id, ip, port);
+            client.on("open", () => {
+                
+                this.emit("open", client, isNotice);
+                if(this.addr.length){
+                    this.create();
+                }
+                else this.status = 0;
+            })
+        }
+    }
+
+    public open(ip: string, port: number, isNotice:boolean){
+        this.addr.push({ ip, port, isNotice, id: Utils.MD5(`${this.id}-${ip}-${port}`, this.signKey) });
+        if(this.status === 0){
+            this.status = 1;
+            this.create();
+        }
+    }
+}
+
 class SServer extends EventEmitter {
     /**主机ID  */
     private id: string = Utils.ID24;
@@ -571,21 +635,42 @@ class SServer extends EventEmitter {
     private server: net.Server;
     /**服务缓存 Key */
     private keepKey:string = "sserver-keepKey:";
-
+    private clientConnQueue:ClientConnQueue;
+    private master: boolean = true;
     constructor(private config: SConfig) {
         super();
-
         this.server = net.createServer(socket => {
             let client = new ServerConn(socket);
+            
+            if(this.master && !this.CNodeList.length) return client.destroy();
+
             client.on("close", _ => { this.closeNode(client.id) })
             client.on("data", this.onmessage.bind(this));
             client.on("open", () => {
+                
+                this.SNodeList.push(this.SNodes[client.id] = client);
+
                 client.sendSyncevents(this.eventNames());
                 if(this.jobServerId === this.id) client.sendSyncjobserverid(this.jobServerId);
                 for (let { id, crontime, cmd, args } of <Array<{ id: string, crontime:string, cmd:string, args:any[] }>><any[]>Object.values(this.cronjobs)) client.sendSyncjob(id, crontime, cmd, args)
-                this.SNodeList.push(this.SNodes[client.id] = client);
+
             })
         });
+
+        this.clientConnQueue = new ClientConnQueue(this.id, this.config.signKey, (addr: Addr) => !this.CNodes[addr.id]);
+
+        this.clientConnQueue.on("open", (client: ClientConn, isNotice:boolean) => {
+            
+            if (this.CNodes[client.id] === client) return;
+
+            this.CNodeList.push(this.CNodes[client.id] = client);
+            
+            client.on("close", _ => { this.closeNode(client.id) })
+            client.on("data", this.onmessage.bind(this));
+            client.sendShakehands(Shakehands.start, client.id)
+            isNotice && setTimeout(_=> client.sendOnline(this.id, this.config.ip, this.config.port), 100);
+
+        })
     }
 
     /**
@@ -611,8 +696,7 @@ class SServer extends EventEmitter {
         for (let client of this.CNodeList.filter(c => c.events.has(event))) {
             client.sendEmitevent(event, args);
         }
-
-        return super.emit(event, ...args);;
+        return super.emit(event, ...args);
     }
 
     /**
@@ -633,15 +717,7 @@ class SServer extends EventEmitter {
      */
     private connectNode(ip: string, port: number, isNotice: boolean = true) {
         try {
-            let client = new ClientConn(this.SID(ip, port), ip, port);
-            client.on("close", _ => { this.closeNode(client.id) })
-            client.on("data", this.onmessage.bind(this));
-            client.on("open", () => {
-                this.CNodeList.push(this.CNodes[client.id] = client);
-                client.sendPing()
-                client.sendShakehands(Shakehands.start, client.id)
-                isNotice && client.sendOnline(this.id, this.config.ip, this.config.port)
-            })
+            this.clientConnQueue.open(ip, port, isNotice)
         } catch (error) {
             console.error("connectNode", error)
         }
@@ -787,7 +863,6 @@ class SServer extends EventEmitter {
             case PackeType.online: {
                 // 有服务器上线
                 let cid = this.SID(message.ip, message.port);
-
                 if (this.SNodes[id]) {
                     if (!this.CNodes[cid]) {
                         this.connectNode(message.ip, message.port, false);
@@ -858,7 +933,9 @@ class SServer extends EventEmitter {
     
             this.server.listen(this.config.port, async () => {
                 await this.redis.set(`${this.keepKey}:${this.config.ip}:${this.config.port}`, 1);
-                if (ip && ip + port !== this.config.ip + this.config.port) this.connectNode(ip, port);
+                if (this.master = (ip && ip + port) !== (this.config.ip + this.config.port)) {
+                    this.connectNode(ip, port);
+                }
                 await this.vieJobServer();
                 cb && cb();
             })

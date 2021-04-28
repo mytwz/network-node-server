@@ -44,6 +44,8 @@ declare class SServer extends EventEmitter {
     private server;
     /**服务缓存 Key */
     private keepKey;
+    private clientConnQueue;
+    private master;
     constructor(config: SConfig);
     /**
      * 绑定或者订阅事件
